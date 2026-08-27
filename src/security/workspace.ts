@@ -70,8 +70,15 @@ export class WorkspaceGuard {
 
   private resolveLexically(userPath: string): string {
     if (userPath.includes("\0")) throw new WinCodeError("INVALID_PATH", "Path contains a NUL byte.");
-    const candidate = path.isAbsolute(userPath) ? path.resolve(userPath) : path.resolve(this.configuredRoot, userPath);
-    if (!isInside(this.configuredRoot, candidate)) {
+    const absoluteInput = path.isAbsolute(userPath);
+    const candidate = absoluteInput ? path.resolve(userPath) : path.resolve(this.configuredRoot, userPath);
+
+    // Relative paths can be rejected lexically before touching the filesystem.
+    // Absolute paths are validated after realpath/nearest-parent resolution. On
+    // Windows, configuredRoot can use an 8.3/alias spelling while another tool
+    // (notably Git) returns the same directory using its long canonical spelling;
+    // comparing those two spellings before realpath would be a false escape.
+    if (!absoluteInput && !isInside(this.configuredRoot, candidate)) {
       throw new WinCodeError("OUTSIDE_WORKSPACE", `Path escapes workspace: ${userPath}`);
     }
     return candidate;

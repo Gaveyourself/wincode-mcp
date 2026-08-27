@@ -24,6 +24,19 @@ test("allows paths inside workspace", async () => {
   }
 });
 
+
+test("allows the canonical absolute spelling of the workspace", async () => {
+  const fixture = await tempWorkspace();
+  try {
+    const guard = await WorkspaceGuard.create(fixture.root);
+    const canonical = await fs.realpath(fixture.root);
+    const result = await guard.resolveExisting(canonical);
+    assert.equal(result.relativePath, ".");
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("rejects lexical parent traversal", async () => {
   const fixture = await tempWorkspace();
   try {
@@ -43,7 +56,7 @@ test("does not confuse sibling prefix with workspace", async () => {
     await fs.mkdir(sibling);
     await fs.writeFile(path.join(sibling, "secret.txt"), "secret");
     const guard = await WorkspaceGuard.create(root);
-    await assert.rejects(() => guard.resolveExisting(path.join(sibling, "secret.txt")), /escapes workspace/);
+    await assert.rejects(() => guard.resolveExisting(path.join(sibling, "secret.txt")), /outside workspace/);
   } finally {
     await fs.rm(parent, { recursive: true, force: true });
   }
