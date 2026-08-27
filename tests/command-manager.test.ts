@@ -8,12 +8,8 @@ import { CommandManager } from "../src/runtime/command-manager.js";
 import { WorkspaceGuard } from "../src/security/workspace.js";
 
 async function waitForExit(manager: CommandManager, id: string): Promise<void> {
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    if (manager.status(id).state !== "running") return;
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
-  throw new Error("command did not exit in time");
+  const result = await manager.wait(id, 5000);
+  if (result.timedOut) throw new Error("command did not exit in time");
 }
 
 test("commands are disabled unless explicitly enabled", async () => {
@@ -41,6 +37,25 @@ test("captures managed command output in trusted mode", async () => {
     assert.match(output.output, /hello/);
     assert.match(output.output, /world/);
     assert.equal(manager.status(started.commandId).state, "exited");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sends stdin and waits event-driven for completion", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wincode-cmd-stdin-"));
+  try {
+    const guard = await WorkspaceGuard.create(root);
+    const manager = new CommandManager(guard, 1024 * 1024, true);
+    const started = await manager.start({
+      command: process.execPath,
+      args: ["-e", "process.stdin.setEncoding('utf8'); process.stdin.once('data', d => { process.stdout.write('got:' + d.trim()); process.exit(0); });"],
+    });
+    await manager.sendInput(started.commandId, "ping", true);
+    const waited = await manager.wait(started.commandId, 5000);
+    assert.equal(waited.timedOut, false);
+    assert.equal(waited.state, "exited");
+    assert.match(manager.getOutput(started.commandId).output, /got:ping/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

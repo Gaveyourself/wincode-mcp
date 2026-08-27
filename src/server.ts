@@ -5,7 +5,9 @@ import { WinCodeConfig } from "./config.js";
 import { errorMessage } from "./errors.js";
 import { CommandManager } from "./runtime/command-manager.js";
 import { WorkspaceGuard } from "./security/workspace.js";
+import { AuditLogger } from "./services/audit.js";
 import { FileService } from "./services/files.js";
+import { GitService } from "./services/git.js";
 
 function jsonText(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -17,24 +19,28 @@ function toolError(error: unknown) {
 
 export async function createWinCodeServer(config: WinCodeConfig): Promise<McpServer> {
   const guard = await WorkspaceGuard.create(config.workspace);
-  const files = new FileService(guard, config.maxReadBytes, config.maxSearchResults);
+  const audit = new AuditLogger(guard.canonicalRoot, config.auditEnabled);
+  const files = new FileService(guard, config.maxReadBytes, config.maxWriteBytes, config.maxSearchResults, audit);
   const commands = new CommandManager(
     guard,
     config.commandOutputBytes,
     process.env.WINCODE_ALLOW_COMMANDS === "1",
+    audit,
   );
+  const git = new GitService(guard, config.gitOutputBytes);
 
-  const server = new McpServer({ name: "wincode-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "wincode-mcp", version: "0.2.0" });
 
   server.registerTool("health", { description: "Return WinCode MCP runtime health and configuration summary." }, async () =>
     jsonText({
       ok: true,
       name: "wincode-mcp",
-      version: "0.1.0",
+      version: "0.2.0",
       platform: process.platform,
       node: process.version,
       workspace: guard.canonicalRoot,
       commandsEnabled: process.env.WINCODE_ALLOW_COMMANDS === "1",
+      auditEnabled: config.auditEnabled,
     }),
   );
 
@@ -55,7 +61,7 @@ export async function createWinCodeServer(config: WinCodeConfig): Promise<McpSer
   server.registerTool(
     "read_file",
     {
-      description: "Read a bounded UTF-8 file inside the workspace.",
+      description: "Read a bounded UTF-8 file inside the workspace and return its SHA-256.",
       inputSchema: z.object({
         path: z.string().min(1),
         maxBytes: z.number().int().min(1).optional(),
@@ -63,6 +69,36 @@ export async function createWinCodeServer(config: WinCodeConfig): Promise<McpSer
     },
     async ({ path, maxBytes }) => {
       try { return jsonText(await files.readFile(path, maxBytes)); } catch (error) { return toolError(error); }
+    },
+  );
+
+  server.registerTool(
+    "write_file",
+    {
+      description: "Create or overwrite a bounded UTF-8 file inside the workspace. expectedSha256 prevents stale overwrites.",
+      inputSchema: z.object({
+        path: z.string().min(1),
+        text: z.string(),
+        expectedSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+      }),
+    },
+    async ({ path, text, expectedSha256 }) => {
+      try { return jsonText(await files.writeFile(path, text, expectedSha256)); } catch (error) { return toolError(error); }
+    },
+  );
+
+  server.registerTool(
+    "apply_patch",
+    {
+      description: "Apply a context-checked unified diff to one existing UTF-8 file. Conflicting context fails without writing.",
+      inputSchema: z.object({
+        path: z.string().min(1),
+        patch: z.string().min(1),
+        expectedSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+      }),
+    },
+    async ({ path, patch, expectedSha256 }) => {
+      try { return jsonText(await files.applyPatch(path, patch, expectedSha256)); } catch (error) { return toolError(error); }
     },
   );
 
@@ -124,6 +160,35 @@ export async function createWinCodeServer(config: WinCodeConfig): Promise<McpSer
   );
 
   server.registerTool(
+    "send_command_input",
+    {
+      description: "Send bounded text input to a still-running managed command.",
+      inputSchema: z.object({
+        commandId: z.string().uuid(),
+        input: z.string().max(256 * 1024),
+        appendNewline: z.boolean().default(false),
+      }),
+    },
+    async ({ commandId, input, appendNewline }) => {
+      try { return jsonText(await commands.sendInput(commandId, input, appendNewline)); } catch (error) { return toolError(error); }
+    },
+  );
+
+  server.registerTool(
+    "wait_command",
+    {
+      description: "Wait for a managed command to finish, bounded by timeoutMs.",
+      inputSchema: z.object({
+        commandId: z.string().uuid(),
+        timeoutMs: z.number().int().min(0).max(60_000).default(30_000),
+      }),
+    },
+    async ({ commandId, timeoutMs }) => {
+      try { return jsonText(await commands.wait(commandId, timeoutMs)); } catch (error) { return toolError(error); }
+    },
+  );
+
+  server.registerTool(
     "terminate_command",
     {
       description: "Terminate a managed command and its process tree when possible.",
@@ -131,6 +196,46 @@ export async function createWinCodeServer(config: WinCodeConfig): Promise<McpSer
     },
     async ({ commandId }) => {
       try { return jsonText(await commands.terminate(commandId)); } catch (error) { return toolError(error); }
+    },
+  );
+
+  server.registerTool(
+    "git_status",
+    {
+      description: "Return read-only Git status for a repository whose root must stay inside the workspace.",
+      inputSchema: z.object({ cwd: z.string().default(".") }),
+    },
+    async ({ cwd }) => {
+      try { return jsonText(await git.status(cwd)); } catch (error) { return toolError(error); }
+    },
+  );
+
+  server.registerTool(
+    "git_diff",
+    {
+      description: "Return a bounded read-only Git diff.",
+      inputSchema: z.object({
+        cwd: z.string().default("."),
+        staged: z.boolean().default(false),
+        path: z.string().optional(),
+      }),
+    },
+    async ({ cwd, staged, path }) => {
+      try { return jsonText(await git.diff(cwd, staged, path)); } catch (error) { return toolError(error); }
+    },
+  );
+
+  server.registerTool(
+    "git_log",
+    {
+      description: "Return bounded read-only Git commit history.",
+      inputSchema: z.object({
+        cwd: z.string().default("."),
+        limit: z.number().int().min(1).max(100).default(20),
+      }),
+    },
+    async ({ cwd, limit }) => {
+      try { return jsonText(await git.log(cwd, limit)); } catch (error) { return toolError(error); }
     },
   );
 

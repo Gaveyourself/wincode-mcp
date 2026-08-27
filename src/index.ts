@@ -7,4 +7,4 @@ const config = loadConfig();
 const server = await createWinCodeServer(config);
 
 void serveStdio(() => server);
-console.error(`[wincode-mcp] v0.1.0 stdio | workspace=${config.workspace} | commands=${process.env.WINCODE_ALLOW_COMMANDS === "1" ? "enabled" : "disabled"}`);
+console.error(`[wincode-mcp] v0.2.0 stdio | workspace=${config.workspace} | commands=${process.env.WINCODE_ALLOW_COMMANDS === "1" ? "enabled" : "disabled"} | audit=${config.auditEnabled ? "enabled" : "disabled"}`);

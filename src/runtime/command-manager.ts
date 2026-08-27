@@ -1,8 +1,10 @@
 import { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 
 import { WinCodeError } from "../errors.js";
 import { WorkspaceGuard } from "../security/workspace.js";
+import { AuditLogger } from "../services/audit.js";
 
 export type CommandShell = "direct" | "powershell" | "cmd";
 export type CommandState = "running" | "exited" | "failed" | "terminated";
@@ -20,6 +22,8 @@ interface CommandRecord {
   baseOffset: number;
   totalBytes: number;
   terminationRequested: boolean;
+  completion: Promise<void>;
+  resolveCompletion: () => void;
 }
 
 export interface StartCommandInput {
@@ -49,6 +53,10 @@ export interface CommandOutput extends CommandSnapshot {
   truncatedBeforeOffset: boolean;
 }
 
+export interface WaitResult extends CommandSnapshot {
+  timedOut: boolean;
+}
+
 export class CommandManager {
   private readonly records = new Map<string, CommandRecord>();
 
@@ -56,6 +64,7 @@ export class CommandManager {
     private readonly guard: WorkspaceGuard,
     private readonly outputCapBytes: number,
     private readonly allowCommands: boolean,
+    private readonly audit?: AuditLogger,
     private readonly powershellExecutable = process.env.WINCODE_POWERSHELL ?? "pwsh.exe",
   ) {}
 
@@ -76,6 +85,8 @@ export class CommandManager {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
+    let resolveCompletion = () => {};
+    const completion = new Promise<void>(resolve => { resolveCompletion = resolve; });
     const id = randomUUID();
     const record: CommandRecord = {
       id,
@@ -90,6 +101,8 @@ export class CommandManager {
       baseOffset: 0,
       totalBytes: 0,
       terminationRequested: false,
+      completion,
+      resolveCompletion,
     };
     this.records.set(id, record);
 
@@ -98,15 +111,27 @@ export class CommandManager {
     child.on("error", error => {
       this.append(record, Buffer.from(`\n[spawn error] ${error.message}\n`, "utf8"));
       record.state = "failed";
-      record.finishedAt = new Date().toISOString();
+      record.finishedAt ??= new Date().toISOString();
+      record.resolveCompletion();
     });
     child.on("close", (code, signal) => {
       record.exitCode = code;
       record.signal = signal;
-      record.finishedAt = new Date().toISOString();
+      record.finishedAt ??= new Date().toISOString();
       record.state = record.terminationRequested ? "terminated" : record.state === "failed" ? "failed" : "exited";
+      record.resolveCompletion();
     });
 
+    await this.audit?.record({
+      action: "start_command",
+      details: {
+        commandId: id,
+        cwd: cwd.relativePath,
+        shell: input.shell ?? "direct",
+        commandLabel: (input.shell ?? "direct") === "direct" ? path.basename(input.command) : `<${input.shell ?? "direct"} expression>`,
+        argCount: input.args?.length ?? 0,
+      },
+    });
     return this.snapshot(record);
   }
 
@@ -135,10 +160,37 @@ export class CommandManager {
     };
   }
 
+  async sendInput(commandId: string, input: string, appendNewline = false): Promise<CommandSnapshot> {
+    const record = this.requireRecord(commandId);
+    if (record.state !== "running" || record.process.stdin.destroyed || !record.process.stdin.writable) {
+      throw new WinCodeError("COMMAND_NOT_RUNNING", `Command is not accepting input: ${commandId}`);
+    }
+    const payload = appendNewline ? `${input}${process.platform === "win32" ? "\r\n" : "\n"}` : input;
+    await new Promise<void>((resolve, reject) => {
+      record.process.stdin.write(payload, error => error ? reject(error) : resolve());
+    });
+    await this.audit?.record({ action: "send_command_input", details: { commandId, bytes: Buffer.byteLength(payload), appendNewline } });
+    return this.snapshot(record);
+  }
+
+  async wait(commandId: string, timeoutMs = 30_000): Promise<WaitResult> {
+    const record = this.requireRecord(commandId);
+    if (record.state !== "running") return { ...this.snapshot(record), timedOut: false };
+    const boundedTimeout = Math.max(0, timeoutMs);
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = await Promise.race([
+      record.completion.then(() => false),
+      new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(true), boundedTimeout); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    return { ...this.snapshot(record), timedOut };
+  }
+
   async terminate(commandId: string): Promise<CommandSnapshot> {
     const record = this.requireRecord(commandId);
     if (record.state !== "running") return this.snapshot(record);
     record.terminationRequested = true;
+    await this.audit?.record({ action: "terminate_command", details: { commandId } });
 
     if (process.platform === "win32" && record.process.pid) {
       await new Promise<void>(resolve => {

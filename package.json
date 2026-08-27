@@ -1,10 +1,12 @@
 {
   "name": "wincode-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A Windows-first local coding MCP server with workspace isolation and managed command execution.",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "start": "node dist/src/index.js",
