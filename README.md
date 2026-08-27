@@ -2,11 +2,12 @@
 
 WinCode MCP is a Windows-first local coding MCP server. It is intentionally developed as a standalone product and does not depend on LiyuanCode MCP.
 
-## V0.2 scope
+## V0.3 scope
 
-V0.2 provides:
+V0.3 provides:
 
 - MCP v2 stdio transport
+- loopback-only Streamable HTTP transport for Secure MCP Tunnel use
 - workspace health information
 - bounded directory listing and UTF-8 file reading
 - recursive text search without following symlink directories
@@ -19,6 +20,7 @@ V0.2 provides:
 - workspace path isolation for built-in file and Git tools
 - JSONL mutation/command audit log under `.wincode/audit.jsonl`
 - commands disabled by default and available only in explicit trusted mode
+- independent Windows tunnel scripts/profile using ports 48371/48372
 
 ## Requirements
 
@@ -55,6 +57,24 @@ npm run dev
 ```
 
 `stdio` is the MCP protocol channel, so the server writes human-readable logs only to stderr.
+
+
+## Run over loopback HTTP
+
+For an OpenAI Secure MCP Tunnel, WinCode provides a local-only HTTP endpoint. It refuses non-loopback bind hosts.
+
+```powershell
+$env:WINCODE_WORKSPACE = "D:\Projects\MyProject"
+$env:WINCODE_ALLOW_COMMANDS = "1"
+npm run start:http
+```
+
+Defaults:
+
+- MCP: `http://127.0.0.1:48371/mcp`
+- health: `http://127.0.0.1:48371/health`
+
+For the independent `wincode-real` Secure MCP Tunnel setup and the supervised Windows stack script, see [`docs/WINDOWS_TUNNEL.md`](docs/WINDOWS_TUNNEL.md).
 
 ## Tools
 
@@ -95,17 +115,18 @@ The audit log intentionally records metadata rather than command arguments or sh
 - `WINCODE_AUDIT=0`: disable JSONL audit logging
 - `WINCODE_POWERSHELL`: PowerShell executable; defaults to `pwsh.exe`
 - `WINCODE_GIT`: Git executable; defaults to `git`
+- `WINCODE_HTTP_HOST`: HTTP bind host; only loopback values are accepted, default `127.0.0.1`
+- `WINCODE_HTTP_PORT`: local HTTP MCP port, default `48371`
 
 ## Roadmap
 
-### V0.3
+### V0.4
 
 - clangd / pyright / TypeScript language-server diagnostics
 - Windows-native process isolation prototype
-- Streamable HTTP bound to loopback with authentication
 - packaging and self-diagnostics
 
-### V0.4+
+### V0.5+
 
 - WSL backend
 - tray application and installer

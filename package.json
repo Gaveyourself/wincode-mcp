@@ -1,6 +1,6 @@
 {
   "name": "wincode-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "A Windows-first local coding MCP server with workspace isolation and managed command execution.",
   "type": "module",
@@ -9,12 +9,15 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:http": "tsx src/http.ts",
     "start": "node dist/src/index.js",
+    "start:http": "node dist/src/http.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "zod": "^4.0.0"
   },

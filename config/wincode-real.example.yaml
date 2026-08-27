@@ -1,0 +1,18 @@
+# Reference only. Prefer scripts/init-tunnel.ps1 so tunnel-client writes the
+# exact schema supported by the installed client version.
+config_version: 1
+control_plane:
+  base_url: "https://api.openai.com"
+  tunnel_id: "tunnel_REPLACE_ME"
+  api_key: "env:CONTROL_PLANE_API_KEY"
+health:
+  listen_addr: "127.0.0.1:48372"
+admin_ui:
+  open_browser: false
+log:
+  level: info
+  format: json
+mcp:
+  server_urls:
+    - channel: main
+      url: "http://127.0.0.1:48371/mcp"

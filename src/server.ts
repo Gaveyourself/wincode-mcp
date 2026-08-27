@@ -1,13 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 
-import { WinCodeConfig } from "./config.js";
 import { errorMessage } from "./errors.js";
-import { CommandManager } from "./runtime/command-manager.js";
-import { WorkspaceGuard } from "./security/workspace.js";
-import { AuditLogger } from "./services/audit.js";
-import { FileService } from "./services/files.js";
-import { GitService } from "./services/git.js";
+import { WinCodeRuntime } from "./runtime/runtime.js";
 
 function jsonText(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -17,29 +12,19 @@ function toolError(error: unknown) {
   return { content: [{ type: "text" as const, text: errorMessage(error) }], isError: true };
 }
 
-export async function createWinCodeServer(config: WinCodeConfig): Promise<McpServer> {
-  const guard = await WorkspaceGuard.create(config.workspace);
-  const audit = new AuditLogger(guard.canonicalRoot, config.auditEnabled);
-  const files = new FileService(guard, config.maxReadBytes, config.maxWriteBytes, config.maxSearchResults, audit);
-  const commands = new CommandManager(
-    guard,
-    config.commandOutputBytes,
-    process.env.WINCODE_ALLOW_COMMANDS === "1",
-    audit,
-  );
-  const git = new GitService(guard, config.gitOutputBytes);
-
-  const server = new McpServer({ name: "wincode-mcp", version: "0.2.0" });
+export function createWinCodeServer(runtime: WinCodeRuntime): McpServer {
+  const { config, guard, files, commands, commandsEnabled, git } = runtime;
+  const server = new McpServer({ name: "wincode-mcp", version: "0.3.0" });
 
   server.registerTool("health", { description: "Return WinCode MCP runtime health and configuration summary." }, async () =>
     jsonText({
       ok: true,
       name: "wincode-mcp",
-      version: "0.2.0",
+      version: "0.3.0",
       platform: process.platform,
       node: process.version,
       workspace: guard.canonicalRoot,
-      commandsEnabled: process.env.WINCODE_ALLOW_COMMANDS === "1",
+      commandsEnabled,
       auditEnabled: config.auditEnabled,
     }),
   );
